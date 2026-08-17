@@ -1,0 +1,181 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [pg_trgm]
+}
+
+enum EntryType {
+  snippet
+  note
+  error
+  link
+  doc
+}
+
+enum Plan {
+  free
+  pro
+  team
+  enterprise
+}
+
+enum WorkspaceRole {
+  owner
+  admin
+  member
+}
+
+enum EmbeddingStatus {
+  pending
+  success
+  failed
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String?
+  avatar       String?
+  plan         Plan     @default(free)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  entries          Entry[]
+  tags             Tag[]
+  collections      Collection[]
+  searchLogs       SearchLog[]
+  workspaceMembers WorkspaceMember[]
+  refreshTokens    RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @map("token_hash")
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("refresh_tokens")
+}
+
+model Entry {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  title       String
+  content     String
+  type        EntryType @default(note)
+  language    String?
+  // embedding   Unsupported("vector(1536)")?
+  embeddingStatus EmbeddingStatus @default(pending) @map("embedding_status")
+  sourceUrl   String?   @map("source_url")
+  isPublic    Boolean   @default(false) @map("is_public")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entryTags          EntryTag[]
+  collectionEntries  CollectionEntry[]
+
+  @@index([userId])
+  @@index([userId, type])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("entries")
+}
+
+model Tag {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  name   String
+  color  String @default("#6366f1")
+  count  Int    @default(0)
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entryTags EntryTag[]
+
+  @@unique([userId, name])
+  @@map("tags")
+}
+
+model EntryTag {
+  entryId String @map("entry_id")
+  tagId   String @map("tag_id")
+
+  entry Entry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  tag   Tag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([entryId, tagId])
+  @@map("entry_tags")
+}
+
+model Collection {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  name        String
+  description String?
+  isPublic    Boolean  @default(false) @map("is_public")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  collectionEntries CollectionEntry[]
+
+  @@map("collections")
+}
+
+model CollectionEntry {
+  collectionId String @map("collection_id")
+  entryId      String @map("entry_id")
+
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  entry      Entry      @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, entryId])
+  @@map("collection_entries")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  plan      Plan     @default(team)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  members WorkspaceMember[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  workspaceId String        @map("workspace_id")
+  userId      String        @map("user_id")
+  role        WorkspaceRole @default(member)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+model SearchLog {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  query         String
+  resultsCount  Int      @map("results_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("search_logs")
+}

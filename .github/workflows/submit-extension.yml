@@ -1,0 +1,57 @@
+name: Submit extension to Web Store
+
+# Manual only — publishing to the Chrome Web Store is not something a push should trigger.
+on:
+  workflow_dispatch:
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+
+    env:
+      # Inlined into the published bundle by Plasmo. All three are public values; the
+      # Supabase anon key is safe to ship, the service_role key must never go here.
+      PLASMO_PUBLIC_SUPABASE_URL: ${{ vars.PLASMO_PUBLIC_SUPABASE_URL }}
+      PLASMO_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.PLASMO_PUBLIC_SUPABASE_ANON_KEY }}
+      PLASMO_PUBLIC_API_BASE_URL: ${{ vars.PLASMO_PUBLIC_API_BASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Fail early if store config is missing
+        run: |
+          for var in PLASMO_PUBLIC_SUPABASE_URL PLASMO_PUBLIC_SUPABASE_ANON_KEY PLASMO_PUBLIC_API_BASE_URL; do
+            if [ -z "${!var}" ]; then
+              echo "::error::$var is not set. Add it under Settings → Secrets and variables → Actions → Variables."
+              exit 1
+            fi
+          done
+          case "$PLASMO_PUBLIC_API_BASE_URL" in
+            *localhost*|*127.0.0.1*)
+              echo "::error::PLASMO_PUBLIC_API_BASE_URL points at localhost — that build would be useless to every user but you."
+              exit 1
+              ;;
+          esac
+
+      - run: npm ci
+
+      - name: Build the extension
+        run: npm run build
+
+      - name: Package the extension into a zip artifact
+        run: npm run package
+
+      - name: Browser Platform Publish
+        uses: PlasmoHQ/bpp@v3
+        with:
+          keys: ${{ secrets.SUBMIT_KEYS }}
+          artifact: extension/build/chrome-mv3-prod.zip

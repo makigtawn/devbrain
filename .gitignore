@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# env files — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# next.js
+**/.next/
+web/out/
+web/next-env.d.ts
+web/src/generated/prisma/
+
+# plasmo / extension
+extension/build/
+extension/.plasmo/
+
+# prisma auto-installed agent skill bundles (tooling docs, not app code)
+web/.agents/
+web/.claude/skills/
+web/.windsurf/
+web/skills-lock.json
+
+# misc
+.DS_Store
+*.pem
+*.log
+*.tsbuildinfo
+npm-debug.log*
+
+# editor
+.vscode/

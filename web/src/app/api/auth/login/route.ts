@@ -4,6 +4,7 @@ import { prisma } from "@/server/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { generateAccessToken, generateRefreshToken } from "@/lib/auth/jwt";
 import { setAuthCookiesOnResponse } from "@/lib/auth/cookies";
+import { authLimiter, checkRateLimit, getClientIp } from "@/lib/ratelimit";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -12,6 +13,20 @@ const loginSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getClientIp(request);
+    const rateLimit = await checkRateLimit(authLimiter, `auth:${ip}`);
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many authentication attempts. Please try again later." },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateLimit.retryAfterSeconds),
+          },
+        },
+      );
+    }
+
     const body = await request.json();
     const parsed = loginSchema.safeParse(body);
 

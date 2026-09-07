@@ -4,6 +4,7 @@ import { prisma } from "@/server/db";
 import { hashPassword } from "@/lib/auth/password";
 import { generateAccessToken, generateRefreshToken } from "@/lib/auth/jwt";
 import { setAuthCookiesOnResponse } from "@/lib/auth/cookies";
+import { authLimiter, checkRateLimit, getClientIp } from "@/lib/ratelimit";
 
 const registerSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -13,6 +14,19 @@ const registerSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getClientIp(request);
+    const rateLimit = await checkRateLimit(authLimiter, `auth:${ip}`);
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        { error: "Too many registration attempts. Please try again later." },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": String(rateLimit.retryAfterSeconds),
+          },
+        },
+      );
+    }
     const body = await request.json();
     const parsed = registerSchema.safeParse(body);
 

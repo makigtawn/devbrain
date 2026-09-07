@@ -6,7 +6,7 @@ generator client {
 
 datasource db {
   provider   = "postgresql"
-  extensions = [pg_trgm]
+  extensions = [pg_trgm, vector]
 }
 
 enum EntryType {
@@ -78,7 +78,7 @@ model Entry {
   content     String
   type        EntryType @default(note)
   language    String?
-  // embedding   Unsupported("vector(1536)")?
+  embedding   Unsupported("vector(1536)")?
   embeddingStatus EmbeddingStatus @default(pending) @map("embedding_status")
   sourceUrl   String?   @map("source_url")
   isPublic    Boolean   @default(false) @map("is_public")

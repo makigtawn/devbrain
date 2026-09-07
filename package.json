@@ -1,0 +1,13 @@
+{
+  "name": "devbrain",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node start-dev.js",
+    "dev:all": "node start-dev.js",
+    "dev:web": "cd web && npm run dev",
+    "dev:ext": "cd extension && npm run dev",
+    "build": "cd web && npm run build",
+    "db:push": "cd web && npx prisma db push"
+  }
+}

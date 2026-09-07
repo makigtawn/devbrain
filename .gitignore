@@ -23,6 +23,7 @@ web/.windsurf/
 web/skills-lock.json
 
 # misc
+.pgdata/
 .DS_Store
 *.pem
 *.log

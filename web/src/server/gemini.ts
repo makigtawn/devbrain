@@ -1,4 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import crypto from "crypto";
+import { redis } from "@/lib/redis";
 
 let client: GoogleGenAI | null = null;
 
@@ -11,12 +13,51 @@ function getClient() {
 export const EMBEDDING_MODEL = "gemini-embedding-001";
 export const EMBEDDING_DIMENSIONS = 1536;
 
+const memoryEmbeddingCache = new Map<string, { embedding: number[]; expires: number }>();
+const CACHE_TTL_SECONDS = 86400; // 24 hours
+
+export interface EmbedOptions {
+  cache?: boolean;
+}
+
 /**
  * Returns a 1536-dim embedding, or null if no Gemini key is configured or
- * the API call fails — callers must treat null as "skip semantic search for
- * this entry," never as a reason to fail the caller's own operation.
+ * the API call fails.
+ * If options.cache is true, checks and populates Redis and in-memory caches.
  */
-export async function embedText(text: string): Promise<number[] | null> {
+export async function embedText(
+  text: string,
+  options?: EmbedOptions,
+): Promise<number[] | null> {
+  const shouldCache = Boolean(options?.cache);
+  const normalized = text.trim().toLowerCase();
+  const cacheKey = `devbrain:cache:embed:${crypto
+    .createHash("sha256")
+    .update(normalized)
+    .digest("hex")}`;
+
+  if (shouldCache) {
+    const mem = memoryEmbeddingCache.get(cacheKey);
+    if (mem && mem.expires > Date.now()) {
+      return mem.embedding;
+    }
+
+    if (redis) {
+      try {
+        const cached = await redis.get<number[]>(cacheKey);
+        if (cached && Array.isArray(cached)) {
+          memoryEmbeddingCache.set(cacheKey, {
+            embedding: cached,
+            expires: Date.now() + CACHE_TTL_SECONDS * 1000,
+          });
+          return cached;
+        }
+      } catch (err) {
+        console.warn("[gemini] Redis cache read failed:", err);
+      }
+    }
+  }
+
   const ai = getClient();
   if (!ai) return null;
 
@@ -27,7 +68,26 @@ export async function embedText(text: string): Promise<number[] | null> {
       config: { outputDimensionality: EMBEDDING_DIMENSIONS },
     });
 
-    return res.embeddings?.[0]?.values ?? null;
+    const values = res.embeddings?.[0]?.values ?? null;
+
+    if (values && shouldCache) {
+      memoryEmbeddingCache.set(cacheKey, {
+        embedding: values,
+        expires: Date.now() + CACHE_TTL_SECONDS * 1000,
+      });
+      if (memoryEmbeddingCache.size > 1000) {
+        const firstKey = memoryEmbeddingCache.keys().next().value;
+        if (firstKey) memoryEmbeddingCache.delete(firstKey);
+      }
+
+      if (redis) {
+        redis.set(cacheKey, values, { ex: CACHE_TTL_SECONDS }).catch((err) => {
+          console.warn("[gemini] Redis cache write failed:", err);
+        });
+      }
+    }
+
+    return values;
   } catch (err) {
     console.error("Gemini embedContent failed:", err);
     return null;
@@ -106,7 +166,7 @@ export async function autoTagEntry(
   }
 }
 
-function heuristicAutoTag(title: string, content: string): AutoTagResult {
+export function heuristicAutoTag(title: string, content: string): AutoTagResult {
   const looksLikeCode = /```|function |const |import |class |def |=>/.test(
     content,
   );

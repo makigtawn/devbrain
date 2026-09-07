@@ -10,9 +10,15 @@ interface SemanticRow {
 
 export const searchRouter = createTRPCRouter({
   query: rateLimitedProcedure(searchLimiter)
-    .input(z.object({ q: z.string().min(1).max(500), limit: z.number().min(1).max(50).default(20) }))
+    .input(
+      z.object({
+        q: z.string().min(1).max(500),
+        limit: z.number().min(1).max(50).default(20),
+        logSearch: z.boolean().optional().default(false),
+      }),
+    )
     .query(async ({ ctx, input }) => {
-      const { q, limit } = input;
+      const { q, limit, logSearch } = input;
 
       const [keywordMatches, embedding] = await Promise.all([
         ctx.prisma.entry.findMany({
@@ -27,7 +33,7 @@ export const searchRouter = createTRPCRouter({
           take: limit * 2,
           orderBy: { createdAt: "desc" },
         }),
-        embedText(q),
+        embedText(q, { cache: true }),
       ]);
 
       const scores = new Map<string, number>();
@@ -58,9 +64,13 @@ export const searchRouter = createTRPCRouter({
         .map(([id]) => id);
 
       if (rankedIds.length === 0) {
-        await ctx.prisma.searchLog.create({
-          data: { userId: ctx.userId, query: q, resultsCount: 0 },
-        });
+        if (logSearch) {
+          ctx.prisma.searchLog
+            .create({
+              data: { userId: ctx.userId, query: q, resultsCount: 0 },
+            })
+            .catch(() => {});
+        }
         return [];
       }
 
@@ -78,9 +88,13 @@ export const searchRouter = createTRPCRouter({
         .map((id) => entryMap.get(id))
         .filter((e): e is NonNullable<typeof e> => Boolean(e));
 
-      await ctx.prisma.searchLog.create({
-        data: { userId: ctx.userId, query: q, resultsCount: results.length },
-      });
+      if (logSearch) {
+        ctx.prisma.searchLog
+          .create({
+            data: { userId: ctx.userId, query: q, resultsCount: results.length },
+          })
+          .catch(() => {});
+      }
 
       return results;
     }),

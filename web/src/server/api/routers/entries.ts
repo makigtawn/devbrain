@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure, rateLimitedProcedure } from "@/server/api/trpc";
-import { autoTagEntry, embedText } from "@/server/gemini";
+import { heuristicAutoTag, embedText } from "@/server/gemini";
 import { entryWriteLimiter } from "@/lib/ratelimit";
+import { entryQueue } from "@/lib/queue";
 import { TRPCError } from "@trpc/server";
 
 const writeProcedure = rateLimitedProcedure(entryWriteLimiter);
@@ -34,22 +35,34 @@ async function upsertTags(
   entryId: string,
   tagNames: string[],
 ) {
-  for (const rawName of tagNames) {
-    const name = rawName.trim().toLowerCase().slice(0, 40);
-    if (!name) continue;
+  const cleaned = [
+    ...new Set(
+      tagNames
+        .map((t) => t.trim().toLowerCase().slice(0, 40))
+        .filter(Boolean),
+    ),
+  ];
+  if (cleaned.length === 0) return;
 
-    const tag = await prisma.tag.upsert({
-      where: { userId_name: { userId, name } },
-      update: { count: { increment: 1 } },
-      create: { userId, name, count: 1 },
-    });
+  const tags = await Promise.all(
+    cleaned.map((name) =>
+      prisma.tag.upsert({
+        where: { userId_name: { userId, name } },
+        update: { count: { increment: 1 } },
+        create: { userId, name, count: 1 },
+      })
+    )
+  );
 
-    await prisma.entryTag.upsert({
-      where: { entryId_tagId: { entryId, tagId: tag.id } },
-      update: {},
-      create: { entryId, tagId: tag.id },
-    });
-  }
+  await Promise.all(
+    tags.map((tag) =>
+      prisma.entryTag.upsert({
+        where: { entryId_tagId: { entryId, tagId: tag.id } },
+        update: {},
+        create: { entryId, tagId: tag.id },
+      })
+    )
+  );
 }
 
 async function setEmbedding(
@@ -59,8 +72,6 @@ async function setEmbedding(
 ) {
   const embedding = await embedText(content);
   if (!embedding) {
-    // embedText already swallowed and logged the underlying Gemini error — mark this
-    // entry as unsearchable so the UI can surface it instead of failing silently.
     await prisma.entry.update({
       where: { id: entryId },
       data: { embeddingStatus: "failed" },
@@ -75,7 +86,8 @@ export const entriesRouter = createTRPCRouter({
   create: writeProcedure
     .input(createEntryInput)
     .mutation(async ({ ctx, input }) => {
-      const auto = await autoTagEntry(input.title, input.content);
+      // Instant heuristic tagging (runs in <1ms)
+      const auto = heuristicAutoTag(input.title, input.content);
 
       const entry = await ctx.prisma.entry.create({
         data: {
@@ -86,12 +98,24 @@ export const entriesRouter = createTRPCRouter({
           language: input.language ?? auto.language,
           sourceUrl: input.sourceUrl,
           isPublic: input.isPublic ?? false,
+          embeddingStatus: "pending",
         },
       });
 
-      const tagNames = [...new Set([...(input.tags ?? []), ...auto.tags])];
-      await upsertTags(ctx.prisma, ctx.userId, entry.id, tagNames);
-      await setEmbedding(ctx.prisma, entry.id, `${input.title}\n${input.content}`);
+      const userTags = input.tags ?? [];
+      const initialTags = [...new Set([...userTags, ...auto.tags])];
+      if (initialTags.length > 0) {
+        await upsertTags(ctx.prisma, ctx.userId, entry.id, initialTags);
+      }
+
+      // Enqueue background processing for Gemini AI auto-tagging & vector embedding
+      entryQueue.enqueue({
+        entryId: entry.id,
+        userId: ctx.userId,
+        title: input.title,
+        content: input.content,
+        existingTags: initialTags,
+      });
 
       return entry;
     }),
@@ -129,11 +153,17 @@ export const entriesRouter = createTRPCRouter({
       });
 
       if (data.title || data.content) {
-        await setEmbedding(
-          ctx.prisma,
-          entry.id,
-          `${entry.title}\n${entry.content}`,
-        );
+        await ctx.prisma.entry.update({
+          where: { id: entry.id },
+          data: { embeddingStatus: "pending" },
+        });
+
+        entryQueue.enqueue({
+          entryId: entry.id,
+          userId: ctx.userId,
+          title: entry.title,
+          content: entry.content,
+        });
       }
 
       return entry;

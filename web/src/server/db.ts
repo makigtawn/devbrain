@@ -4,6 +4,10 @@ import { Pool } from "pg";
 
 function getPoolConfig() {
   const urlStr = process.env.DATABASE_URL || "postgresql://postgres:password@localhost:5432/devbrain";
+  const max = parseInt(process.env.DB_POOL_MAX || "20", 10);
+  const idleTimeoutMillis = parseInt(process.env.DB_POOL_IDLE_TIMEOUT || "30000", 10);
+  const connectionTimeoutMillis = parseInt(process.env.DB_POOL_CONN_TIMEOUT || "5000", 10);
+
   try {
     const parsed = new URL(urlStr);
     return {
@@ -12,14 +16,16 @@ function getPoolConfig() {
       user: parsed.username || "postgres",
       password: parsed.password || "password",
       database: parsed.pathname ? parsed.pathname.replace(/^\//, "") : "devbrain",
-      max: 1,
-      idleTimeoutMillis: 10_000,
+      max,
+      idleTimeoutMillis,
+      connectionTimeoutMillis,
     };
   } catch {
     return {
       connectionString: urlStr,
-      max: 1,
-      idleTimeoutMillis: 10_000,
+      max,
+      idleTimeoutMillis,
+      connectionTimeoutMillis,
     };
   }
 }
